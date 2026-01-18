@@ -1,2 +1,2 @@
-print("Hello word!\n Again!")
+print("Oh, no!\n Goodbye word!")
 
