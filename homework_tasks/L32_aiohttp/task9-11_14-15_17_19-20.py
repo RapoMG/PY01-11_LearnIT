@@ -33,6 +33,12 @@ Task 15:
     DELETE na /products/{id} . Handler ma pobrać obiekt, usunąć go ( await
     session.delete(product) ) i zwrócić pustą odpowiedź ze statusem 204 (No Content)
 
+Task 17:
+    Aiohttp - Paginacja: (Znacie paginację z Django). Zmodyfikuj handler GET
+    /products (zadanie 10). Handler ma przyjmować page (domyślnie 1) i limit (domyślnie 10) z
+    request.query. Zmodyfikuj zapytanie SQLAlchemy, aby użyć .offset() i .limit() do zwrócenia
+    tylko jednej "strony" wyników
+
 Task 20:
     SQLAlchemy Async - JOIN: (Znacie JOIN). Dodaj do modelu Product
     relację ForeignKey do User (twórca produktu). Zmodyfikuj handler GET
@@ -50,6 +56,8 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 # Importy modeli (znane z synchronicznego SQLAlchemy)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import String, Integer, select
+
+routes = web.RouteTableDef() # decorator setting
 
 # --- Ustawienia Bazy Danych ---
 # Upewnij się, że masz działającą bazę PostgreSQL!
@@ -205,25 +213,89 @@ async def create_product(request: web.Request):
 async def get_products(request: web.Request):
     """Handler GET /products - get list of all products."""
     session_factory: async_sessionmaker[AsyncSession] = request.app["db_session_factory"]
+
+    #### Task 17 ####
+    try:
+        page = int(request.query.get("page", 1))
+        limit = int(request.query.get("limit", 10))
+        
+        print(f"page: {page}, limit: {limit}") # (page, limit)
+    except ValueError:
+        raise web.HTTPBadRequest(text="Page and limit must be integers.")
+    
+    if page < 1 or limit < 1:
+        raise web.HTTPBadRequest(text="Page and limit must be greater than 0.")
+    
+    offset = (page - 1) * limit
+    ###############
+
     async with session_factory() as session:
-        stmt = select(Product)
+        #stmt = select(Product)
+        stmt = select(Product).offset(offset).limit(limit) # Task 17
         result = await session.execute(stmt)
         products = result.scalars().all()
+
         products_data = [p.to_dict() for p in products]
-        return web.json_response(products_data)
+        
+        #return web.json_response(products_data)
+        return web.json_response({"products": products_data, "page": page, "limit": limit}) # Task 17
 
 #### Task 11 ####
 async def get_product(request: web.Request):
     """Handler GET /products/{product_id} - get product by id."""
-    product_id = request.match_info["product_id"]
+    product_id = int(request.match_info["product_id"])
     session_factory: async_sessionmaker[AsyncSession] = request.app["db_session_factory"]
     async with session_factory() as session:
         stmt = select(Product).where(Product.id == product_id)
         result = await session.execute(stmt)
         product = result.scalar_one_or_none()
         if product is None:
-            raise web.HTTPNotFound(text=f"Produkt o id {product_id} nie istnieje")
+            raise web.HTTPNotFound(text=f"Produkt o id {product_id} nie istnieje", status=404)
         return web.json_response(product.to_dict())
+
+#### Task 14 ####
+#@routes.patch("/products/{product_id}")
+async def update_product(request: web.Request):
+    """Handler PATCH /products/{product_id} - update product by id."""
+
+    product_id = int(request.match_info["product_id"])
+
+    session_factory: async_sessionmaker[AsyncSession] = request.app["db_session_factory"]
+
+    async with session_factory() as session:
+        async with session.begin():
+            stmt = select(Product).where(Product.id == product_id)
+            result = await session.execute(stmt)
+            product = result.scalar_one_or_none()
+
+            if product is None:
+                raise web.HTTPNotFound(text=f"Produkt o id {product_id} nie istnieje", status=404)
+            
+        data = await request.json()
+
+        if "name" in data:
+            product.name = data.get("name")
+        if "price" in data:
+            product.price = data.get("price")
+
+        await session.flush()
+
+        return web.json_response(product.to_dict())
+
+async def delete_product(request: web.Request):
+    """Handler DELETE /products/{product_id} - delete product by id."""
+    product_id = int(request.match_info["product_id"])
+    session_factory: async_sessionmaker[AsyncSession] = request.app["db_session_factory"]
+    async with session_factory() as session:
+        async with session.begin():
+            stmt = select(Product).where(Product.id == product_id)
+            result = await session.execute(stmt)
+            product = result.scalar_one_or_none()
+            if product is None:
+                raise web.HTTPNotFound(text=f"Produkt o id {product_id} nie istnieje", status=404)
+            session.delete(product)
+            await session.flush()
+        return web.json_response(product.to_dict())             
 
 # --- Tworzenie Aplikacji ---
 def create_app():
@@ -234,6 +306,8 @@ def create_app():
     app.router.add_post("/products", create_product)  # task 9
     app.router.add_get("/products", get_products)  # task 10
     app.router.add_get("/products/{product_id}", get_product)  # task 11
+    app.router.add_patch("/products/{product_id}", update_product)  # task 14
+    app.router.add_delete("/products/{product_id}", delete_product)  # task 15
 
     # Rejestrujemy sygnały
     app.on_startup.append(init_db)
